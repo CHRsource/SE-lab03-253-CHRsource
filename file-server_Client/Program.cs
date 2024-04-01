@@ -98,6 +98,7 @@ try
         {
             Console.WriteLine("Enter name of the file: >");
             temp2 = Console.ReadLine();
+            bool fileExists = true;
             while (true)
             {
                 if (File.Exists(absoluteDataDir + temp2))
@@ -106,10 +107,14 @@ try
                 }
                 else
                 {
+                    fileExists = false;
                     Console.WriteLine("File dosn`t exists");
-                    Console.WriteLine("Enter name of the file: >");
-                    temp2 = Console.ReadLine();
+                    break;
                 }
+            }
+            if (!fileExists)
+            {
+                continue;
             }
             Console.WriteLine("Enter name of the file to be saved on server: >");
             string temp3 = Console.ReadLine();
