@@ -1,0 +1,4 @@
+Привет!
+Это проект на сокетах.
+It was designed by the help of C# programming language.
+Buy-buy!

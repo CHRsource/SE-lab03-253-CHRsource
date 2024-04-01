@@ -2,38 +2,53 @@
 using System.Net;
 using System.Text;
 using System.Collections;
-using System.Drawing;
-using System.Drawing.Imaging;
 
 
-if (!Directory.Exists("server\\data\\"))
+string absoluteDataDir = "";
+string dataDir = "\\server\\data\\";
+string currentDirectory = Directory.GetParent(Directory.GetCurrentDirectory()).Parent.Parent.FullName;
+absoluteDataDir = currentDirectory + dataDir;
+
+if (!Directory.Exists(absoluteDataDir))
 {
-    Directory.CreateDirectory("server\\data\\");
+    Directory.CreateDirectory(absoluteDataDir);
 }
 if (!File.Exists("indexes.txt"))
 {
-    File.Create("indexes.txt");
+    File.Create("indexes.txt"); 
 }
+
 IPEndPoint ipPoint = new IPEndPoint(IPAddress.Any, 8888);
 using Socket server = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
 server.Bind(ipPoint);
 server.Listen();
-Console.WriteLine($"Server started!");
+Console.WriteLine("Server started!");
 Hashtable filesTable = new Hashtable();
 int voidId = 1;
 putHashTable(ref filesTable, ref voidId);
+List<Socket> clients = new List<Socket>();
 try
 {
     while (true) // Цикл для ожидания новых подключений
     {
-        Socket client = await server.AcceptAsync();
-        Thread t = new Thread(async () => ProcessClientAsync(client));
-        t.Start();
+        try
+        {
+            Socket client = await server.AcceptAsync();
+            clients.Add(client);
+            Thread t = new Thread(async () => await ProcessClientAsync(client));
+            t.Start();
+        }
+        catch
+        {
+            break;
+        }
     }
 }
 finally
 {
+    getHashTable(filesTable);
     server.Close();
+    Console.WriteLine("Server stopped.");
 }
 
 
@@ -44,178 +59,108 @@ async Task ProcessClientAsync(Socket client)
     var files = new List<(int, string)>();
     try
     {
-        string temp = "";
-        client.Receive(b);
-        string msg = Encoding.Default.GetString(b);
-        var zpr = msg.Split("`");
-        if (zpr[0].Contains("exit"))
+        while (true)
         {
-            client.Close();
-        }
-        else if (zpr[0] == "1")
-        {
-            byte[] resp = new byte[Convert.ToInt32(zpr[3])]; client.Receive(resp);
-            if (zpr[1].Contains("txt"))
+        
+            client.Receive(b);
+            string msg = Encoding.Default.GetString(b);
+            var zpr = msg.Split("`");
+            if (zpr[0].Contains("exit"))
             {
-                PUT(client, zpr[2], filesTable, resp);
+                client.Close();
+                break;
+            }
+            else if (zpr[0] == "1")
+            {
+                byte[] resp = new byte[Convert.ToInt32(zpr[3])]; client.Receive(resp);
+                PUT(client, zpr[2], filesTable, resp, zpr[4]);
+            }
+            else if (zpr[0] == "2")
+            {
+                if (zpr[1] == "1")
+                {
+                    GET(zpr[2], client);
+                }
+                else if (zpr[1] == "2")
+                {
+                    GETbyId(zpr[2], filesTable, client);
+                }
             }
             else
             {
-                PUT_image(client, zpr[2], filesTable, resp);
-            }
-            getHashTable(filesTable);
-        }
-        else if (zpr[0] == "2")
-        {
-            if (zpr[1] == "1")
-            {
-                var res = GET(zpr[2]);
-                await client.SendAsync(Encoding.UTF8.GetBytes(res), SocketFlags.None);
-            }
-            else if (zpr[1] == "2")
-            {
-                var res = GETbyId(zpr[2], filesTable);
-                await client.SendAsync(Encoding.UTF8.GetBytes(res), SocketFlags.None);
-            }
-            else if (zpr[1] == "3")
-            {
-                var res = GET_image(zpr[2]);
-                await client.SendAsync(Encoding.UTF8.GetBytes(res), SocketFlags.None);
-                if (res.Contains("200"))
+                if (zpr[1] == "1")
                 {
-                    using (var ms = new MemoryStream())
-                    {
-                        Image image = Image.FromFile("server\\data\\" + zpr[2]);
-                        image.Save(ms, image.RawFormat);
-                        await client.SendAsync(ms.ToArray(), SocketFlags.None);
-                    }
+                    var res = DELETE(zpr[2], ref filesTable);
+                    await client.SendAsync(Encoding.UTF8.GetBytes(res), SocketFlags.None);
                 }
-            }
-            else if (zpr[1] == "4")
-            {
-                var res = GET_imagebyId(zpr[2], filesTable);
-                await client.SendAsync(Encoding.UTF8.GetBytes(res), SocketFlags.None);
-                if (res.Contains("200"))
+                else
                 {
-                    using (var ms = new MemoryStream())
-                    {
-                        Image image = Image.FromFile("server\\data\\" + filesTable[zpr[2]]);
-                        image.Save(ms, image.RawFormat);
-                        await client.SendAsync(ms.ToArray(), SocketFlags.None);
-                    }
+                    var res = DELETEbyID(zpr[2], ref filesTable);
+                    await client.SendAsync(Encoding.UTF8.GetBytes(res), SocketFlags.None);
                 }
-            }
-        }
-        else
-        {
-            if (zpr[1] == "1")
-            {
-                var res = DELETE(zpr[2], ref filesTable);
-                await client.SendAsync(Encoding.UTF8.GetBytes(res), SocketFlags.None);
-                getHashTable(filesTable);
-            }
-            else
-            {
-                var res = DELETEbyID(zpr[2], ref filesTable);
-                await client.SendAsync(Encoding.UTF8.GetBytes(res), SocketFlags.None);
-                getHashTable(filesTable);
             }
         }
     }
-    catch (Exception e)
+    catch (Exception)
     {
-        Console.WriteLine("Client connected");
+        Console.WriteLine("Client disconnected");
+        clients.Remove(client);
+        if (clients.Count == 0)
+        {
+            getHashTable(filesTable);
+            server.Close();
+        }
     }
     finally
     {
-
         client.Close();
-        Console.WriteLine("Client disconnected");
     }
 }
 
-async void PUT(Socket client, string fileName, Hashtable a, byte[] responseBytes)
+async void PUT(Socket client, string fileName, Hashtable a, byte[] responseBytes, string FileFormat)
 {
     if (fileName != "")
     {
-        if (a.Contains(fileName))
+        if (a.ContainsValue(fileName))
         {
-            client.SendAsync(Encoding.UTF8.GetBytes("403"), SocketFlags.None);
+            await client.SendAsync(Encoding.UTF8.GetBytes("403"), SocketFlags.None);
         }
         else
         {
-
-            client.SendAsync(Encoding.UTF8.GetBytes("202`" + voidId.ToString()), SocketFlags.None);
-            using (var file = File.Open("server\\data\\" + fileName, FileMode.CreateNew, FileAccess.Write))
+            await client.SendAsync(Encoding.UTF8.GetBytes("202`" + voidId.ToString()), SocketFlags.None);
+            using (var file = File.Open(absoluteDataDir + fileName, FileMode.CreateNew, FileAccess.Write))
             {
                 file.Write(responseBytes);
             }
             a.Add(voidId.ToString(), fileName);
-            voidId = a.Count + 1;
+            voidId += 1;
         }
     }
     else
     {
 
-        client.SendAsync(Encoding.UTF8.GetBytes("202`" + voidId.ToString()), SocketFlags.None);
-        await using (var file = File.Open("server\\data\\" + voidId + ".txt", FileMode.CreateNew, FileAccess.Write))
+        await client.SendAsync(Encoding.UTF8.GetBytes("202`" + voidId.ToString()), SocketFlags.None);
+        await using (var file = File.Open(absoluteDataDir + voidId + FileFormat.Split(".")[1], FileMode.CreateNew, FileAccess.Write))
         {
             file.Write(responseBytes);
         }
-        a.Add(voidId.ToString(), voidId + ".txt");
-        voidId = a.Count + 1;
+        a.Add(voidId.ToString(), voidId + FileFormat.Split(".")[1]);
+        voidId += 1;
     }
 }
-
-
-async void PUT_image(Socket client, string fileName, Hashtable a, byte[] responseBytes)
-{
-    if (fileName != "")
-    {
-        if (a.Contains(fileName))
-        {
-            client.SendAsync(Encoding.UTF8.GetBytes("403"), SocketFlags.None);
-        }
-        else
-        {
-
-            client.SendAsync(Encoding.UTF8.GetBytes("202`" + voidId.ToString()), SocketFlags.None);
-            using (var ms = new MemoryStream(responseBytes))
-            {
-                Image img = Image.FromStream(ms);
-                img.Save("server\\data\\" + fileName, ImageFormat.Png);
-                ms.Close();
-            }
-            a.Add(voidId.ToString(), fileName);
-            voidId = a.Count + 1;
-        }
-    }
-    else
-    {
-
-        client.SendAsync(Encoding.UTF8.GetBytes("202`" + voidId.ToString()), SocketFlags.None);
-        using (var ms = new MemoryStream(responseBytes))
-        {
-            Image img = Image.FromStream(ms);
-            img.Save("server\\data\\" + voidId + ".png", ImageFormat.Png);
-            ms.Close();
-        }
-        a.Add(voidId.ToString(), voidId + ".png");
-        voidId = a.Count + 1;
-    }
-}
-
-
 
 void putHashTable(ref Hashtable a, ref int voidId)
 {
     using (StreamReader reader = new StreamReader("indexes.txt"))
     {
         string? line;
-        while ((line = reader.ReadLine()) != null)
+        while ((line = reader.ReadLine()) != null && line.Trim() != "")
         {
             a.Add(line.Split(" ")[0], line.Split(" ")[1]);
-            voidId++;
+            if (voidId <= Convert.ToInt16(line.Split(" ")[0]))
+            {
+                voidId = Convert.ToInt16(line.Split(" ")[0]) + 1;
+            }
         }
     }
 }
@@ -232,89 +177,49 @@ void getHashTable(Hashtable a)
         }
     }
 }
-string GET(string fileName)
+async void GET(string fileName, Socket client)
 {
-    if (!File.Exists("server\\data\\" + fileName))
+    if (!File.Exists(absoluteDataDir + fileName))
     {
-        return "404";
+        await client.SendAsync(Encoding.UTF8.GetBytes("404"), SocketFlags.None);
     }
     else
     {
-        string temp = File.ReadAllText("server\\data\\" + fileName);
-        return "200`" + temp;
+        var e = new FileInfo(absoluteDataDir + fileName).Length;
+        var temp = File.ReadAllBytes(absoluteDataDir + fileName);
+        await client.SendAsync(Encoding.UTF8.GetBytes("200`" + e), SocketFlags.None);
+        await client.SendAsync(temp, SocketFlags.None);
     }
 }
 
-string GET_image(string fileName)
-{
-    if (!File.Exists("server\\data\\" + fileName))
-    {
-        return "404";
-    }
-    else
-    {
-        long e;
-        byte[] ms1;
-        using (var ms = new MemoryStream())
-        {
-            Image image = Image.FromFile("server\\data\\" + fileName);
-            image.Save(ms, image.RawFormat);
-            e = ms.Length;
-            ms1 = ms.ToArray();
-            ms.Close();
-        }
-        return "200`" + ms1.Length + "`";
-    }
-}
-string GET_imagebyId(string fileID, Hashtable a)
+async void GETbyId(string fileID, Hashtable a, Socket client)
 {
     if (!a.ContainsKey(fileID))
     {
-        return "404";
+        await client.SendAsync(Encoding.UTF8.GetBytes("404"), SocketFlags.None);
     }
     else
     {
-        long e;
-        byte[] ms1;
-        using (var ms = new MemoryStream())
-        {
-            Image image = Image.FromFile("server\\data\\" + a[fileID]);
-            image.Save(ms, image.RawFormat);
-            e = ms.Length;
-            ms1 = ms.ToArray();
-            ms.Close();
-        }
-        return "200`" + ms1.Length + "`";
-    }
-}
-
-string GETbyId(string fileID, Hashtable a)
-{
-    if (!a.ContainsKey(fileID))
-    {
-        return "404";
-    }
-    else
-    {
-        string temp = File.ReadAllText("server\\data\\" + a[fileID]);
-        return "200`" + temp;
+        var e = new FileInfo(absoluteDataDir + a[fileID]).Length;
+        var temp = File.ReadAllBytes(absoluteDataDir + a[fileID]);
+        await client.SendAsync(Encoding.UTF8.GetBytes("200`" + e), SocketFlags.None);
+        await client.SendAsync(temp, SocketFlags.None);
     }
 }
 string DELETE(string fileName, ref Hashtable a)
 {
-    if (!File.Exists("server\\data\\" + fileName))
+    if (!File.Exists(absoluteDataDir + fileName))
     {
         return "404";
     }
     else
     {
-        File.Delete("server\\data\\" + fileName);
+        File.Delete(absoluteDataDir + fileName);
         foreach (var key in a.Keys)
         {
-            if (a[key] == fileName)
+            if (a[key] as string == fileName)
             {
                 a.Remove(key);
-                voidId = Convert.ToInt16(key);
                 break;
             }
         }
@@ -330,7 +235,7 @@ string DELETEbyID(string fileID, ref Hashtable a)
     }
     else
     {
-        File.Delete("server\\data\\" + a[fileID]);
+        File.Delete(absoluteDataDir + a[fileID]);
         a.Remove(fileID);
         voidId = Convert.ToInt16(fileID);
         return "200";
